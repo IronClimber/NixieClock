@@ -11,14 +11,14 @@
 #define BUZZER_START 7
 #define BUZZER_STOP  20
 
-#define NEON_TIMER   500
+#define NEON_TIMER   20 
 
-#define TRAIN_TIMER  500
+#define TRAIN_TIMER  20
 #define TRAIN_PERIOD 1
 
-#define BLINK_TIME   250
+#define BLINK_TIME   10
 
-#define DATE_TIMEOUT 5000
+#define DATE_TIMEOUT 200
 
 //#define
 
@@ -64,7 +64,7 @@ uint8_t digits[] = {
 
 
 // ------------------ Flags ------------------------------------------------
-uint8_t neon_blink_avaliable = 1;
+uint8_t neon_blink_state = 0; // 0 - blink 1Hz, 1 - on, 2 - off, 3 - blink 2Hz
 uint8_t indi_blink[4] = { 0x00 };
 uint8_t blink_state = 1;
 
@@ -101,7 +101,7 @@ void i2c_stop() {
 
 }
     
-uint8_t i2c_write(uint8_t byte) {
+void i2c_write(uint8_t byte) {
     
     // Send a byte
     for (uint8_t i = 0; i < 8; i++) {
@@ -123,24 +123,16 @@ uint8_t i2c_write(uint8_t byte) {
     DDRA &= ~(1 << I2C_SDA_PIN); // Set SDA as input ??? DDRA?
     _delay_us(I2C_DELAY);
     PORTA |= (1 << I2C_SCL_PIN);  // Set SCL high
-    _delay_us(I2C_DELAY_HALF);
+    _delay_us(I2C_DELAY);
     
-    // Generate an ACK
-    uint8_t ack = 1;
-    if (PINA & (1 << I2C_SDA_PIN)) {
-        ack = 1; // NACK received
-    } else {
-        ack = 0; // ACK received
-    }
+    // Generate an ACK: DELETED
 
-    _delay_us(I2C_DELAY_HALF);
 
     PORTA &= ~(1 << I2C_SCL_PIN); // Set SCL low
     // Set SDA as output ??? DDRA?
     DDRA |= (1 << I2C_SDA_PIN);
     PORTA &= ~(1 << I2C_SDA_PIN);
-    
-    return ack;
+
 }
 
 uint8_t i2c_read(uint8_t ack) {
@@ -187,28 +179,19 @@ uint8_t i2c_read(uint8_t ack) {
 
 #define RTC_CONTROL_REGISTER 0x0E
 
+uint8_t min = 0;
+uint8_t hour = 0;
+uint8_t day = 0;
+uint8_t month = 0;
+uint8_t year = 0;
 
-struct rtc_time
-{
-	uint8_t sec;
-	uint8_t min;
-	uint8_t hour;
-};
-
-struct rtc_date
-{
-	uint8_t day;
-	uint8_t month;
-	uint8_t year;
-};
-
-static uint8_t bcd (uint8_t data) {
+uint8_t bcd (uint8_t data) {
     uint8_t bc;
     bc = ((((data & (1 << 6)) | (data & (1 << 5)) | (data & (1 << 4)))*0x0A) >> 4)
 	+ ((data & (1 << 3))|(data & (1 << 2))|(data & (1 << 1))|(data & 0x01));
     return bc;
 }
-
+/*
 static uint8_t bin(uint8_t dec) {
 	uint8_t bcd;
 	uint8_t n, dig, num, count;
@@ -226,54 +209,49 @@ static uint8_t bin(uint8_t dec) {
 	
 	return bcd;
 }
+*/
 
-struct rtc_time realtime;
-struct rtc_date realdate;
-
-uint8_t rtc3231a_init(void) {
+void rtc3231a_init(void) {
        
     i2c_start();
-    if (i2c_write(RTC_WADDR)) {return 1; }
-    if (i2c_write(RTC_CONTROL_REGISTER)) { return 2; }
-    if (i2c_write(0x20)) { return 3; }
-    if (i2c_write(0x08)) { return 4; }
+    i2c_write(RTC_WADDR);
+    i2c_write(RTC_CONTROL_REGISTER);
+    i2c_write(0x20);
+    i2c_write(0x08);
     i2c_stop();
 
-    return 0;
 }
 
-uint8_t rtc3231a_read_time(struct rtc_time *time) {
+void rtc3231a_read_time() {
    
     i2c_start();
-    if (i2c_write(RTC_WADDR)) { return 1; }
-    if (i2c_write(0x00)) { return 2; }
+    i2c_write(RTC_WADDR);
+    i2c_write(0x01);
     i2c_stop();
     i2c_start();
-    if (i2c_write(RTC_RADDR)) { return 3; }
-    time->sec = bcd(i2c_read(0));
-    time->min = bcd(i2c_read(0));
-    time->hour = bcd(i2c_read(1));
+    i2c_write(RTC_RADDR);
+    //time->sec = bcd(i2c_read(0));
+    min = bcd(i2c_read(0));
+    hour = bcd(i2c_read(1));
     i2c_stop();
 
-    return 0;
 }
 
-uint8_t rtc3231a_read_date(struct rtc_date *date) {
+void rtc3231a_read_date() {
 
     i2c_start();
-    if (i2c_write(RTC_WADDR)) { return 1; }
-    if (i2c_write(0x04)) { return 2; }
+    i2c_write(RTC_WADDR);
+    i2c_write(0x04);
     i2c_stop();
     i2c_start();
-    if (i2c_write(RTC_RADDR)) { return 3; }
-    date->day = bcd(i2c_read(0));
-    date->month = bcd(i2c_read(0));
-    date->year = bcd(i2c_read(1));
+    i2c_write(RTC_RADDR);
+    day = bcd(i2c_read(0));
+    month = bcd(i2c_read(0));
+    year = bcd(i2c_read(1));
     i2c_stop();
-    
-    return 0;
+
 }
-
+/*
 uint8_t rtc3231a_write_date() {
 
     i2c_start();
@@ -285,7 +263,7 @@ uint8_t rtc3231a_write_date() {
    
     return 0;
 }
-
+*/
 // -------------------------- EEPROM ------------------------------
 
 #define INIT_VALUE 0xCE
@@ -359,61 +337,55 @@ void set_indicator(uint8_t n, uint8_t value) {
 }
 
 void display_time() {
-    set_indicator(0,realtime.hour/10);
-    set_indicator(1,realtime.hour%10);
-    set_indicator(2,realtime.min/10);
-    set_indicator(3,realtime.min%10);
+    set_indicator(0,hour/10);
+    set_indicator(1,hour%10);
+    set_indicator(2,min/10);
+    set_indicator(3,min%10);
 }
 
 void display_date() {
-    set_indicator(0,realdate.day/10);
-    set_indicator(1,realdate.day%10);
-    set_indicator(2,realdate.month/10);
-    set_indicator(3,realdate.month%10);
+    set_indicator(0,day/10);
+    set_indicator(1,day%10);
+    set_indicator(2,month/10);
+    set_indicator(3,month%10);
 }
 /*
 
 void display_time() {
-    [realtime.hour/10];
-    indi[1] = digits[realtime.hour%10+10];
-    indi[2] = digits[realtime.min/10+20];
-    indi[3] = digits[realtime.min%10+30];
+    [hour/10];
+    indi[1] = digits[hour%10+10];
+    indi[2] = digits[min/10+20];
+    indi[3] = digits[min%10+30];
 }
 */
 /*
 void display_time_ms() {
-    indi[0] = digits[(uint8_t)realtime.min/10];
-    indi[1] = digits[(uint8_t)realtime.min%10+10];
-    indi[2] = digits[(uint8_t)realtime.sec/10+20];
-    indi[3] = digits[(uint8_t)realtime.sec%10+30];
+    indi[0] = digits[(uint8_t)min/10];
+    indi[1] = digits[(uint8_t)min%10+10];
+    indi[2] = digits[(uint8_t)sec/10+20];
+    indi[3] = digits[(uint8_t)sec%10+30];
 }
 */
 
 
 
-// --------------------------- Timer ------------------------------
-volatile uint32_t milliseconds = 0;
-volatile uint32_t neon_timer = 0;
-volatile uint32_t blink_timer = 0;
-volatile uint32_t buzzer_timer = 0;
-volatile uint32_t date_timer = 0;
 
 
 // --------------------------- Buttons ----------------------------
 // SET_PIN    PD1
 // MODE_PIN   PD0
-/*
-#define CONTACT_BOUNCE_TIME      50
 
-volatile uint32_t set_button_timer = 0;
-volatile uint32_t mode_button_timer = 0;
+#define CONTACT_BOUNCE_TIME      2
+
+uint8_t set_button_timer = 0;
+uint8_t mode_button_timer = 0;
 uint8_t set_button_flag = 0;
 uint8_t mode_button_flag = 0;
 uint8_t set_button_state = 0;
 uint8_t mode_button_state = 0;
-*/
+
 uint8_t first_mode_pressed = 1; 
-volatile uint32_t mode_hold_timer = 0;
+
 
 /*
 uint8_t is_set_pressed() {
@@ -426,12 +398,19 @@ uint8_t is_mode_pressed() {
     return 0;
 } 
 */
+
+// --------------------------- Timer ------------------------------
+    uint8_t neon_timer = 0;
+    uint8_t blink_timer = 0;
+    uint8_t buzzer_timer = 0;
+    uint8_t date_timer = 0;
+    uint8_t mode_hold_timer = 0;
 // --------------------------- Buzzer -----------------------------
-
-void buzzer(uint32_t time) {
-    buzzer_timer = milliseconds + time;
+/*
+void buzzer(uint8_t time) {
+    buzzer_timer = ticks + time;
 }
-
+*/
 // ----------------------------
 // --------------------------- Main -------------------------------
 
@@ -459,10 +438,10 @@ int main(void) {
     TCCR0A |= (1 << WGM01);
     
     // Установка предделителя (например, 64 для периода в 1 миллисекунду при тактовой частоте 8 МГц)
-    TCCR0B |= (1 << CS01) | (1 << CS00);
+    TCCR0B |= (1 << CS02) | (1 << CS00);
     
     // Устанавливаем значение, при котором будет генерироваться прерывание (OCR0)
-    OCR0A = 124;  // (125 - 1)Для периода в 1 миллисекунду при тактовой частоте 8 МГц
+    OCR0A = 196;  // (125 - 1)Для периода в 1 миллисекунду при тактовой частоте 8 МГц
     
     // Разрешение прерывания по совпадению с OCR0
     TIMSK |= (1 << OCIE0A);
@@ -509,25 +488,25 @@ int main(void) {
     }
 #endif
 
-    indi[0] = 0x00;
-    indi[1] = 0x00;
-    indi[2] = 0x00;
-    indi[3] = 0x00;
-    
+    neon_timer = 0;
+    blink_timer = 0;
+    buzzer_timer = 0;
+    date_timer = 0;
+
     while (1) {
         
        // ------------------- READ BUTTONS ---------------------
-       /*
+       
        set_button_state = !(PIND & SET_PIN);
        mode_button_state = !(PIND & MODE_PIN);
     
        if (set_button_state 
            && !set_button_flag 
-           && (milliseconds - set_button_timer > CONTACT_BOUNCE_TIME)
+           && (set_button_timer > CONTACT_BOUNCE_TIME)
             ) {
             
                 set_button_flag = 1;
-                set_button_timer = milliseconds;
+                set_button_timer = 0;
             }
         if (!set_button_state 
             && set_button_flag
@@ -537,26 +516,26 @@ int main(void) {
     
         if (mode_button_state 
             && !mode_button_flag 
-            && (milliseconds - mode_button_timer > CONTACT_BOUNCE_TIME)
+            && (mode_button_timer > CONTACT_BOUNCE_TIME)
             ) {
             
                 mode_button_flag = 1;
-                mode_button_timer = milliseconds;
+                mode_button_timer = 0;
             }
         if (!mode_button_state 
             && mode_button_flag
         ) { 
                 mode_button_flag = 0; 
         }
-*/
+
        // ----------------- NEON --------------------
-       if (milliseconds - neon_timer > NEON_TIMER) {
-           neon_timer = milliseconds;
-           if (neon_blink_avaliable) {
+       if (neon_timer > NEON_TIMER) {
+           neon_timer = 0;
+           if (neon_blink_state == 0) {
                PORTD ^= (1 << NEON_PIN); //Toggle neon
            }
-           rtc3231a_read_time(&realtime);
-           rtc3231a_read_date(&realdate);
+           rtc3231a_read_time();
+           rtc3231a_read_date();
       
        }
        // ----------------- STATE MACHINE ---------------
@@ -564,7 +543,7 @@ int main(void) {
        case CURRENT_TIME:
            display_time();
            if (!(PIND & (1 << SET_PIN))) {
-               date_timer = milliseconds;
+               date_timer = 0;
                mode = CURRENT_DATE;
            }
            /*
@@ -574,15 +553,15 @@ int main(void) {
            if (!(PIND & (1 << MODE_PIN))) {
                if (first_mode_pressed) {
                    first_mode_pressed = 0; 
-                   mode_hold_timer = milliseconds;
+                   mode_hold_timer = 0;
                }
-               if (milliseconds - mode_hold_timer > 3000) {
+               if (mode_hold_timer > 120) {
                    indi_blink[0] = 1;
                    indi_blink[1] = 1;
                    indi_blink[2] = 1;
                    indi_blink[3] = 1;
-                   neon_blink_avaliable = 0;
-                   buzzer(500);
+                   neon_blink_state = 3;
+                   //buzzer(20);
                    mode = SET_TIME;
                }           
            }
@@ -592,7 +571,7 @@ int main(void) {
            break;
        case CURRENT_DATE:
            display_date();
-           if (milliseconds - date_timer > DATE_TIMEOUT) {
+           if (date_timer > DATE_TIMEOUT) {
                mode = CURRENT_TIME;
            }
            break;
@@ -601,12 +580,98 @@ int main(void) {
            if (!(PIND & (1 << SET_PIN))) {
                indi_blink[2] = 0;
                indi_blink[3] = 0;
+               neon_blink_state = 2;
                mode = SET_HOURS;
            }
            break;
        case SET_HOURS:
-           //if (!(PIND & (1 << SET_PIN))) {
-           //}
+           if (!(PIND & (1 << MODE_PIN))) {
+               indi_blink[0] = 0;
+               indi_blink[1] = 0;
+               indi_blink[2] = 1;
+               indi_blink[3] = 1;
+               mode = SET_MINUTES;
+           }
+           break;
+       case SET_MINUTES:
+           if (!(PIND & (1 << MODE_PIN))) {
+               //set time
+               indi[2] = 0x00;
+               indi[3] = 0x00;
+               indi_blink[2] = 0;
+               indi_blink[3] = 0;
+               neon_blink_state = 1;
+               mode = SET_12_24;
+           }
+           break;
+       case SET_12_24:
+           set_indicator(0,1);
+           set_indicator(1,2);
+           if (!(PIND & (1 << MODE_PIN))) {
+               indi[0] = 0x00;
+               indi[1] = 0x00;
+               mode = SET_LED;
+           }
+           break;
+       case SET_LED:
+           set_indicator(3,cp.led_mode);
+           if (!(PIND & (1 << MODE_PIN))) {
+               indi[3] = 0x00;
+               mode = SET_BUZZER;
+           }
+           break;
+       case SET_BUZZER:
+           set_indicator(2,cp.buzzer_mode);
+           if (!(PIND & (1 << MODE_PIN))) {
+               indi[2] = 0x00;
+               mode = SET_LAMP_TRAIN;
+           }
+           break;
+       case SET_LAMP_TRAIN:
+           set_indicator(1,cp.lamp_training_mode);
+           if (!(PIND & (1 << MODE_PIN))) {
+               indi[1] = 0x00;
+               indi_blink[2] = 1;
+               indi_blink[3] = 1;
+               mode = SET_YEAR;
+           }
+           break;
+       case SET_YEAR:
+           set_indicator(2,year/10);
+           set_indicator(3,year%10);
+           if (!(PIND & (1 << MODE_PIN))) {
+               mode = SET_MONTH;
+           }
+           break;
+       case SET_MONTH:
+           set_indicator(0,day/10);
+           set_indicator(1,day%10);
+           set_indicator(2,month/10);
+           set_indicator(3,month%10);
+           
+           if (!(PIND & (1 << MODE_PIN))) {
+               indi_blink[0] = 1;
+               indi_blink[1] = 1;
+               indi_blink[2] = 0;
+               indi_blink[3] = 0;
+               mode = SET_DAY;
+           }
+           break;
+       case SET_DAY:
+           if (!(PIND & (1 << MODE_PIN))) {
+               indi_blink[0] = 0;
+               indi_blink[1] = 0;
+               indi[1] = 0x00;
+               indi[2] = 0x00;
+               indi[3] = 0x00;
+               mode = SET_CALENDAR;
+           }
+           break;
+       case SET_CALENDAR:
+           set_indicator(0,cp.calendar_mode);
+           if (!(PIND & (1 << MODE_PIN))) {
+               mode = CURRENT_TIME;
+           }
            break;
        default:
            break;
@@ -615,17 +680,27 @@ int main(void) {
       
       /* -------------------------- Buzzer ------------------------ */
       /* todo: timer overflow */
-      if (buzzer_timer > milliseconds) { PORTD |= (1 << BUZZER_PIN); }
-      else  { PORTD &= ~(1 << BUZZER_PIN); }
+      /*if (buzzer_timer > ticks) { PORTD |= (1 << BUZZER_PIN); }
+      else  { PORTD &= ~(1 << BUZZER_PIN); }*/
          
-      if (milliseconds - blink_timer > BLINK_TIME) {
-          blink_timer = milliseconds;
+      if (blink_timer > BLINK_TIME) {
+          blink_timer = 0;
           blink_state = !blink_state;
       }
       
-      if (!neon_blink_avaliable) {
+      switch (neon_blink_state) {
+      case 2:
+          PORTD |= (1 << NEON_PIN);
+          break;
+      case 1:
+          PORTD &= ~(1 << NEON_PIN);
+          break;
+      case 3:
           if (!blink_state) { PORTD |= (1 << NEON_PIN); }
           else  { PORTD &= ~(1 << NEON_PIN); }
+          break;
+      default:
+          break;
       }
       
       /* -------------------------- Display ----------------------- */
@@ -634,14 +709,20 @@ int main(void) {
           else { buf[i] = 0x00; }
       }
 
-    }
+      _delay_us(50);
 
+    }
+    
     return 0;
 }
 
 // ----------------------- Interrupts ---------------------------
 ISR(TIMER0_COMPA_vect) {
-    milliseconds++;
+    neon_timer++;
+    blink_timer++;
+    buzzer_timer++;
+    date_timer++;
+    mode_hold_timer++;
 }
 
 ISR(TIMER1_COMPA_vect) {
