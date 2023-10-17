@@ -367,18 +367,24 @@ void display_time_ms() {
 }
 */
 
-
-
-
+// --------------------------- Timer ------------------------------
+    uint8_t neon_timer = 0;
+    uint8_t blink_timer = 0;
+    uint8_t buzzer_timer = 0;
+    uint8_t date_timer = 0;
+    uint8_t mode_hold_timer = 0;
+    
+// --------------------------- Buzzer -----------------------------
+/*
+void buzzer(uint8_t time) {
+    buzzer_timer = ticks + time;
+}
+*/
 
 // --------------------------- Buttons ----------------------------
 // SET_PIN    PD1
 // MODE_PIN   PD0
 
-#define CONTACT_BOUNCE_TIME      2
-
-uint8_t set_button_timer = 0;
-uint8_t mode_button_timer = 0;
 uint8_t set_button_flag = 0;
 uint8_t mode_button_flag = 0;
 uint8_t set_button_state = 0;
@@ -386,31 +392,19 @@ uint8_t mode_button_state = 0;
 
 uint8_t first_mode_pressed = 1; 
 
-
-/*
 uint8_t is_set_pressed() {
-    if (set_button_flag) { return 1; }
+    if (set_button_state && set_button_flag) { return 1; }
     return 0;
 } 
 
 uint8_t is_mode_pressed() {
-    if (mode_button_flag) { return 1; }
+    if (mode_button_state && mode_button_flag) {
+        mode_button_flag = 0;
+        return 1; 
+    }
     return 0;
 } 
-*/
 
-// --------------------------- Timer ------------------------------
-    uint8_t neon_timer = 0;
-    uint8_t blink_timer = 0;
-    uint8_t buzzer_timer = 0;
-    uint8_t date_timer = 0;
-    uint8_t mode_hold_timer = 0;
-// --------------------------- Buzzer -----------------------------
-/*
-void buzzer(uint8_t time) {
-    buzzer_timer = ticks + time;
-}
-*/
 // ----------------------------
 // --------------------------- Main -------------------------------
 
@@ -497,37 +491,11 @@ int main(void) {
         
        // ------------------- READ BUTTONS ---------------------
        
-       set_button_state = !(PIND & SET_PIN);
-       mode_button_state = !(PIND & MODE_PIN);
-    
-       if (set_button_state 
-           && !set_button_flag 
-           && (set_button_timer > CONTACT_BOUNCE_TIME)
-            ) {
-            
-                set_button_flag = 1;
-                set_button_timer = 0;
-            }
-        if (!set_button_state 
-            && set_button_flag
-        ) { 
-                set_button_flag = 0; 
-        }
-    
-        if (mode_button_state 
-            && !mode_button_flag 
-            && (mode_button_timer > CONTACT_BOUNCE_TIME)
-            ) {
-            
-                mode_button_flag = 1;
-                mode_button_timer = 0;
-            }
-        if (!mode_button_state 
-            && mode_button_flag
-        ) { 
-                mode_button_flag = 0; 
-        }
-
+       set_button_state = !(PIND & (1 << SET_PIN));
+       mode_button_state = !(PIND & (1 << MODE_PIN));
+       
+       
+ 
        // ----------------- NEON --------------------
        if (neon_timer > NEON_TIMER) {
            neon_timer = 0;
@@ -550,18 +518,20 @@ int main(void) {
            { PORTD |= (1 << LED_PIN); }
            else { PORTD &= ~(1 << LED_PIN); }
            */
-           if (!(PIND & (1 << MODE_PIN))) {
+           if (mode_button_state) {
                if (first_mode_pressed) {
                    first_mode_pressed = 0; 
                    mode_hold_timer = 0;
                }
                if (mode_hold_timer > 120) {
+                   mode_button_flag = 0;
                    indi_blink[0] = 1;
                    indi_blink[1] = 1;
                    indi_blink[2] = 1;
                    indi_blink[3] = 1;
                    neon_blink_state = 3;
                    //buzzer(20);
+                   
                    mode = SET_TIME;
                }           
            }
@@ -583,9 +553,13 @@ int main(void) {
                neon_blink_state = 2;
                mode = SET_HOURS;
            }
+           else if (is_mode_pressed()) {
+               mode = SET_12_24;
+               
+           }
            break;
        case SET_HOURS:
-           if (!(PIND & (1 << MODE_PIN))) {
+           if (is_mode_pressed()) {
                indi_blink[0] = 0;
                indi_blink[1] = 0;
                indi_blink[2] = 1;
@@ -594,20 +568,22 @@ int main(void) {
            }
            break;
        case SET_MINUTES:
-           if (!(PIND & (1 << MODE_PIN))) {
+           if (is_mode_pressed()) {
                //set time
-               indi[2] = 0x00;
-               indi[3] = 0x00;
-               indi_blink[2] = 0;
-               indi_blink[3] = 0;
-               neon_blink_state = 1;
                mode = SET_12_24;
            }
            break;
        case SET_12_24:
+           indi[2] = 0x00;
+           indi[3] = 0x00;
+           indi_blink[0] = 0;
+           indi_blink[1] = 0;
+           indi_blink[2] = 0;
+           indi_blink[3] = 0;
+           neon_blink_state = 1;
            set_indicator(0,1);
            set_indicator(1,2);
-           if (!(PIND & (1 << MODE_PIN))) {
+           if (is_mode_pressed()) {
                indi[0] = 0x00;
                indi[1] = 0x00;
                mode = SET_LED;
@@ -615,21 +591,25 @@ int main(void) {
            break;
        case SET_LED:
            set_indicator(3,cp.led_mode);
-           if (!(PIND & (1 << MODE_PIN))) {
+           if (is_set_pressed()) {
+              // if (cp.led_mode == 2) { cp.led_mode = 0; }
+              // else { cp.led_mode++; }
+           }
+           else if (is_mode_pressed()) {
                indi[3] = 0x00;
                mode = SET_BUZZER;
            }
            break;
        case SET_BUZZER:
            set_indicator(2,cp.buzzer_mode);
-           if (!(PIND & (1 << MODE_PIN))) {
+           if (is_mode_pressed()) {
                indi[2] = 0x00;
                mode = SET_LAMP_TRAIN;
            }
            break;
        case SET_LAMP_TRAIN:
            set_indicator(1,cp.lamp_training_mode);
-           if (!(PIND & (1 << MODE_PIN))) {
+           if (is_mode_pressed()) {
                indi[1] = 0x00;
                indi_blink[2] = 1;
                indi_blink[3] = 1;
@@ -639,7 +619,7 @@ int main(void) {
        case SET_YEAR:
            set_indicator(2,year/10);
            set_indicator(3,year%10);
-           if (!(PIND & (1 << MODE_PIN))) {
+           if (is_mode_pressed()) {
                mode = SET_MONTH;
            }
            break;
@@ -649,7 +629,7 @@ int main(void) {
            set_indicator(2,month/10);
            set_indicator(3,month%10);
            
-           if (!(PIND & (1 << MODE_PIN))) {
+           if (is_mode_pressed()) {
                indi_blink[0] = 1;
                indi_blink[1] = 1;
                indi_blink[2] = 0;
@@ -658,7 +638,7 @@ int main(void) {
            }
            break;
        case SET_DAY:
-           if (!(PIND & (1 << MODE_PIN))) {
+           if (is_mode_pressed()) {
                indi_blink[0] = 0;
                indi_blink[1] = 0;
                indi[1] = 0x00;
@@ -669,7 +649,8 @@ int main(void) {
            break;
        case SET_CALENDAR:
            set_indicator(0,cp.calendar_mode);
-           if (!(PIND & (1 << MODE_PIN))) {
+           if (is_mode_pressed()) {
+               mode_hold_timer = 0;
                mode = CURRENT_TIME;
            }
            break;
@@ -708,6 +689,9 @@ int main(void) {
           if (!blink_state || !indi_blink[i]) { buf[i] = indi[i]; }
           else { buf[i] = 0x00; }
       }
+
+      if (!set_button_state) { set_button_flag = 1; }
+      if (!mode_button_state) { mode_button_flag = 1; }
 
       _delay_us(50);
 
