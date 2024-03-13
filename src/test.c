@@ -5,9 +5,6 @@
 #define LED_START    7
 #define LED_STOP     22
 
-#define TRAIN_START  2
-#define TRAIN_STOP   4
-
 #define BUZZER_START 7
 #define BUZZER_STOP  20
 #define BUZZER_TIMER 20
@@ -15,19 +12,13 @@
 #define NEON_TIMER   20 
 #define BLINK_TIME   10
 
-#define TRAIN_TIMER  20
-#define TRAIN_PERIOD 1
-
-#define DATE_TIMEOUT 200
-
 #include <avr/io.h>
 #include <util/delay.h>
 #include <avr/interrupt.h>
 #include <avr/eeprom.h>
 
-
-#define SET_PIN    0x02  // Set button
-#define MODE_PIN   0x01  // Mode button
+#define SET_PIN    0x01  // Set button
+#define MODE_PIN   0x02  // Mode button
 
 #define BUZZER_PIN PD6
 
@@ -48,7 +39,6 @@
 #define I2C_SCL_PIN    PA1
 #define I2C_SDA_PIN    PA0
 
-
 // ------------------ Flags ------------------------------------------------
 
 #define INDI0_BLINK_MASK 0x01
@@ -62,13 +52,13 @@
 #define BLINK_STATE_MASK            0x80
 #define NEON_BLINK_STATE_MASK       0x40
 #define NEON_STATE_MASK             0x02
+#define NEON_BLINK_STATE_TYPE_MASK  0x01
+
 
 #define TIME_MASK                   0x10
 #define DATE_MASK                   0x20
 
 #define BUZZER_ONCE_MASK            0x08
-
-#define LAMP_TRAINING_MODE_MASK     0x04
 
 /*
 1 - indi 0
@@ -80,7 +70,7 @@
 7 - indi 2 state
 8 - indi 3 state
 
-1 -
+1 - neon_blink_state_type
 2 - neon_state
 3 - lamp_training_mode
 4 - buzzer_once
@@ -104,13 +94,11 @@
 //3- mode_button_state = 0;
 //7 -first_mode_pressed = 1; 
 
-struct Flags {
-    uint8_t button;
-    uint8_t indi;
-    uint8_t common;
-};
 
-struct Flags flags;
+register uint8_t flag_button asm("r2");
+register uint8_t flag_indi asm("r3");
+register uint8_t flag_common asm("r4");
+
 
 // ------------------------- I2C (TWI library) ------------------------------
 #define I2C_DELAY        12
@@ -148,13 +136,13 @@ void i2c_write(uint8_t byte) {
       if (byte & 0x80) { PORTA |= (1 << I2C_SDA_PIN); } // Set SDA high (bit is 1)
       else { PORTA &= ~(1 << I2C_SDA_PIN); } // Set SDA low (bit is 0)
       i2c_delay();
-      byte <<= 1;  // Shift byte to the left
+      byte <<= 1;  
       PORTA |= (1 << I2C_SCL_PIN); // Set SCL high to clock in the bit
       i2c_delay();
       PORTA &= ~(1 << I2C_SCL_PIN); // Set SCL low
     }
 
-    DDRA &= ~(1 << I2C_SDA_PIN); // Set SDA as input ??? DDRA?
+    DDRA &= ~(1 << I2C_SDA_PIN); // Set SDA as input
     i2c_delay();
     PORTA |= (1 << I2C_SCL_PIN);  // Set SCL high
     i2c_delay();
@@ -162,7 +150,7 @@ void i2c_write(uint8_t byte) {
     // Generate an ACK: DELETED
 
     PORTA &= ~(1 << I2C_SCL_PIN); // Set SCL low    
-    DDRA |= (1 << I2C_SDA_PIN); // Set SDA as output ??? DDRA?
+    DDRA |= (1 << I2C_SDA_PIN);   // Set SDA as output
     PORTA &= ~(1 << I2C_SDA_PIN);
 
 }
@@ -218,7 +206,7 @@ uint8_t bcd (uint8_t data) {
 uint8_t bin(uint8_t num) {
     return ((num % 10) | ((num / 10) % 10) << 4);
 }
-
+/*
 void rtc3231a_read_time() {
    
     i2c_start();
@@ -248,18 +236,38 @@ void rtc3231a_read_date() {
     i2c_stop();
 
 }
-
-void rtc3231a_write_time() {
+*/
+void rtc3231a_read() {
 
     i2c_start();
     i2c_write(RTC_WADDR);
-    i2c_write(0x01);
+    i2c_write(0x00);
+    i2c_stop();
+    i2c_start();
+    i2c_write(RTC_RADDR);
+    sec = bcd(i2c_read(0));
+    min = bcd(i2c_read(0));
+    hour = bcd(i2c_read(0));
+    i2c_read(0);
+    day = bcd(i2c_read(0));
+    month = bcd(i2c_read(0));
+    year = bcd(i2c_read(1));
+    i2c_stop();
+
+}
+
+inline void rtc3231a_write_time() {
+
+    i2c_start();
+    i2c_write(RTC_WADDR);
+    i2c_write(0x00);
+    i2c_write(0x00);
     i2c_write(bin(min));
     i2c_write(bin(hour));
    
 }
 
-void rtc3231a_write_date() {
+inline void rtc3231a_write_date() {
 
     i2c_start();
     i2c_write(RTC_WADDR);
@@ -277,50 +285,72 @@ void rtc3231a_write_date() {
 #define TIME_FORMAT_ADDRESS           0x01
 #define LED_MODE_ADDRESS              0x02
 #define BUZZER_MODE_ADDRESS           0x03
-#define LAMP_TRAINING_MODE_ADDRESS    0x04
-#define CALENDAR_MODE_ADDRESS         0x05
 
 // ------------------------- Params -------------------------------
 #define TIME_FORMAT_DEFAULT           0
 #define LED_MODE_DEFAULT              0
 #define BUZZER_MODE_DEFAULT           0
-#define LAMP_TRAINING_MODE_DEFAULT    0
 #define CALENDAR_MODE_DEFAULT         0
+#define NEON_MODE_DEFAULT             0
 
 #define TIME_FORMAT_MAX               1
 #define LED_MODE_MAX                  2
 #define BUZZER_MODE_MAX               2
-#define LAMP_TRAINING_MODE_MAX        1
 #define CALENDAR_MODE_MAX             1
+#define NEON_MODE_MAX                 2
 
 struct Param {
     uint8_t init_value;
     uint8_t time_format;        // 0 - 24,  1 - 12
     uint8_t led_mode;           // 0 - off, 1 - on (7-22), 2 - on
     uint8_t buzzer_mode;        // 0 - off, 1 - on (7-20), 2 - on
-    uint8_t lamp_training_mode; // 0 - off, 1 - on (2-4)
     uint8_t calendar_mode;      // 0 - off, 1 - on
+    uint8_t neon_mode;          // 0 - 1Hz, 1 - 1/3, 2 - off                
 };
 
 struct Param param;
 
-/*
-uint8_t time_format       = TIME_FORMAT_DEFAULT;        // 0 - 12,  1 - 24
-uint8_t led_mode          = LED_MODE_DEFAULT;   // 0 - off, 1 - on (7-22), 2 - on
-uint8_t buzzer_mode       = BUZZER_MODE_DEFAULT;// 0 - off, 1 - on (7-20), 2 - on
-uint8_t lamp_training_mode= LAMP_TRAINING_MODE_DEFAULT; // 0 - off, 1 - on (2-4)
-uint8_t calendar_mode     = CALENDAR_MODE_DEFAULT;      // 0 - off, 1 - om
-*/
-
-void update_params() {
-    //eeprom_update_byte(INIT_VALUE_ADDRESS, INIT_VALUE);
-    //eeprom_update_byte((uint8_t*)TIME_FORMAT_ADDRESS, time_format);
-    //eeprom_update_byte((uint8_t*)LED_MODE_ADDRESS, led_mode);
-    //eeprom_update_byte((uint8_t*)BUZZER_MODE_ADDRESS, buzzer_mode);
-    //eeprom_update_byte((uint8_t*)LAMP_TRAINING_MODE_ADDRESS, lamp_training_mode);
-    //eeprom_update_byte((uint8_t*)CALENDAR_MODE_ADDRESS, calendar_mode);
-    eeprom_update_block(&param, INIT_VALUE_ADDRESS, 6);
-}
+//void eeprom_read_struct() {
+    //while (EECR & (1 << EEPE));
+    /*
+    uint8_t* p = &param.init_value;
+    uint8_t i = 0;
+    do {
+        EEAR=i;
+        EECR |= (1 << EERE);
+        *(p+i) = EEDR;
+        i++;
+    } while (i < 4);
+    */
+    /*
+    uint8_t* p = &param.init_value;
+    EEAR = 0x04;
+    uint8_t i = 4;
+    do {
+        i--;
+        EECR |= (1 << EERE);
+        EEAR = i;        
+        *(p+i) = EEDR;
+    } while (i);      
+    */    
+        
+    /*
+    EECR |= (1 << EERE);
+    param.time_format = EEDR;
+    EEAR++;
+    EECR |= (1 << EERE);
+    param.led_mode = EEDR;
+    EEAR++;
+    EECR |= (1 << EERE);
+    param.buzzer_mode = EEDR;
+    */
+    /*
+    for (uint8_t i = 0; i < 4; i++) {
+        *((uint8_t*)p + i) = EEDR;
+        EEAR++;
+    }
+    */
+//}
 
 // --------------------------- Mode -------------------------------
 #define CURRENT_TIME      0
@@ -331,91 +361,71 @@ void update_params() {
 #define SET_12_24         5
 #define SET_LED           6
 #define SET_BUZZER        7
-#define SET_LAMP_TRAIN    8
-#define SET_YEAR          9
-#define SET_MONTH         10
-#define SET_DAY           11
-#define SET_CALENDAR      12
-#define LAMP_TRAINING     13
+#define SET_YEAR          8
+#define SET_MONTH         9
+#define SET_DAY           10
+#define SET_CALENDAR      11
+#define SET_NEON          12
 
 uint8_t mode = CURRENT_TIME;
     
 // --------------------------- Display ----------------------------
 uint8_t indi[4] = { 0x00 };
-uint8_t digit = 0;
-uint8_t counter = 0;
+register uint8_t digit asm("r5");;
+//uint8_t counter = 0;
 
 const uint8_t digits[] = {0x0A, 0x01, 0x03, 0x09, 0x02, 0x08, 0x0C, 0x00, 0x04, 0x0B };
- /*get_digit(uint8_t v) {
-    switch(v) {
-    case 0: return 0x0A;
-    case 1: return 0x01;
-    case 2: return 0x03;
-    case 3: return 0x09;
-    case 4: return 0x02;
-    case 5: return 0x08;
-    case 6: return 0x0C;
-    case 7: return 0x00;
-    case 8: return 0x04;
-    case 9: return 0x0B;
-    default: return 0x0A;
-    }
-}*/
+
 void __attribute__((noinline)) set_indicatorN(uint8_t n, uint8_t value) {
-    indi[n] = digits[value%10] | (1 << (7-n));
+    indi[n] = digits[value] | (1 << (7-n)); //value%10?
 }
 
 #define PAIR_MASK0 0x00
 #define PAIR_MASK1 0x02
 
 void set_pair_indicator(uint8_t pair, uint8_t value, uint8_t mask) {
-    flags.indi = mask;
+    flag_indi = mask;
     set_indicatorN(pair,value/10);
     set_indicatorN(++pair,value%10);
 }
 
-/*void set_indicator(uint8_t fp, uint8_t sp, uint8_t mask) {
-    flags.indi = mask;
-    set_pair_indicator(PAIR_MASK0, fp, mask);
-    set_pair_indicator(PAIR_MASK1, sp, mask);
-}*/
+void __attribute__((noinline)) delay250()      { _delay_ms(250); }
+void __attribute__((noinline)) delay100()      { _delay_ms(150); }
 
-void set_indicator_all(uint8_t v) {
-    int i = 3;
-    do { set_indicatorN(i, v); } while (i--);
+void train_lamps() {
+    uint8_t i = 9;
+    do {
+        uint8_t j = 3;
+        do { set_indicatorN(j, i); } while (j--);
+        delay250();     
+    } while (i--);   
 }
 
 // --------------------------- Timer ------------------------------
 uint8_t blink_timer = 0;
-uint8_t buzzer_timer = 0;
+//uint8_t buzzer_timer = 0;
 uint8_t mode_hold_timer = 0;
-    
+/*
+void reset_blink_timer() {
+    blink_timer = 0;
+}
+*/
 // --------------------------- Buttons ----------------------------
 // SET_PIN    PD1
 // MODE_PIN   PD0
 
 uint8_t is_set_pressed() {
-    if (flags.button & SET_FLAG && flags.button & SET_STATE) { 
-        flags.button &= ~SET_FLAG;
+    if (flag_button & SET_FLAG && flag_button & SET_STATE) { 
+        flag_button &= ~SET_FLAG;
         return 1; 
     }
     return 0;
 }
  
-/*
-uint8_t is_mode_pressed() {
-    if (flags.button & MODE_FLAG && flags.button & MODE_STATE) { 
-        flags.button &= ~MODE_FLAG;
-        return 1; 
-    }
-    return 0;
-} 
-*/
-
 void process_button(uint8_t pin, uint8_t state, uint8_t flag) {
-       if (!(flags.button & state))  { flags.button |= flag; }
-       if (PIND & pin) { flags.button &= ~state; }
-       else { flags.button |= state; }
+       if (!(flag_button & state))  { flag_button |= flag; }
+       if (PIND & pin) { flag_button &= ~state; }
+       else { flag_button |= state; }
 }
 
 void next_value(uint8_t* vp, uint8_t max_value, uint8_t min_value) {
@@ -424,31 +434,56 @@ void next_value(uint8_t* vp, uint8_t max_value, uint8_t min_value) {
         else { (*vp)++; }
     }
 }
-
-void next_mode(uint8_t m/*, uint8_t p, uint8_t a*/) {
-    if (flags.button & MODE_FLAG && flags.button & MODE_STATE) {
-        flags.button &= ~MODE_FLAG;
-        rtc3231a_write_time();
-        rtc3231a_write_date();
-        update_params();
+/*
+void eeprom_write_byte_my(uint8_t *addr, uint8_t value) {
+    // Wait for completion of previous write
+    while (EECR & (1 << EEPE));
+    // Set up address register
+    EEAR = (uint16_t)addr;
+    // Set the EEMPE bit to enable write
+    EECR |= (1 << EEMPE);
+    // Write the data to data register
+    EEDR = value;
+    // Set the EEPE bit to start write
+    EECR |= (1 << EEPE);
+}
+*/
+void next_mode(uint8_t m) {
+    if (flag_button & MODE_FLAG && flag_button & MODE_STATE) {
+        flag_button &= ~MODE_FLAG;
+        //rtc3231a_write_time();
+        //rtc3231a_write_date();
+        //eeprom_update_block(&param, INIT_VALUE_ADDRESS, 4);
+        
+        uint8_t* p = &param.init_value;
+        uint8_t i = 0;
+        
+        do {
+            uint8_t v = *(p+i);
+            while (EECR & (1 << EEPE));
+            EEAR=i;
+            EECR |= (1 << EERE);
+            uint8_t eeprom_data = EEDR;
+            if (eeprom_data != v) {
+                while (EECR & (1 << EEPE));
+                EEAR=(uint16_t)i;
+                EECR |= (1 << EEMPE);
+                EEDR = v;
+                EECR |= (1 << EEPE);
+            }
+            i++;
+        } while (i < 6); //Number of params
+        
         mode = m;
     }
 }
 
 void process_mode(uint8_t i, uint8_t* param, uint8_t mask, uint8_t max, uint8_t min, uint8_t nm) {
-   flags.indi = mask;
+   flag_indi = mask;
    set_indicatorN(i,*param);
    next_value(param, max, min);
    next_mode(nm);
 }
-
-/*
-void process_mode_p(uint8_t i, uint8_t* param, uint8_t mask, uint8_t max, uint8_t min, uint8_t nm) {
-           set_pair_indicator(i, *param, mask);
-           next_value(param, max, min);
-           next_mode(nm);
-}
-*/
 
 // --------------------------- Main -------------------------------
 
@@ -490,48 +525,45 @@ int main(void) {
     i2c_stop();
     
     // -------------- Restore params from EEPROM -------------------
-    eeprom_read_block(&param, (const void*) INIT_VALUE_ADDRESS, 6);
+    
+    //eeprom_read_block(&param, (const void*) INIT_VALUE_ADDRESS, 4);
 
+    uint8_t* p = &param.init_value;
+    uint8_t i = 0;
+    do {
+        EEAR=i;
+        EECR |= (1 << EERE);
+        *(p+i) = EEDR;
+        i++;
+    } while (i < 6); //Number of params
+    
+    //zero_reg??
     if (param.init_value != INIT_VALUE) {
-        //PORTD |= (1 << LED_PIN);
         param.init_value        = INIT_VALUE;
-        param.time_format       = TIME_FORMAT_DEFAULT; //0-12, 1-24
-        param.led_mode          = LED_MODE_DEFAULT;    //0-off, 1-on(7-22), 2 - on
-        param.buzzer_mode       = BUZZER_MODE_DEFAULT; //0-off, 1-on(7-20), 2-on
-        param.lamp_training_mode= LAMP_TRAINING_MODE_DEFAULT; //0-off, 1-on (2-4)
-        param.calendar_mode     = CALENDAR_MODE_DEFAULT; 
-        ///uint8_t eeprom_init_value = eeprom_read_byte((uint8_t*)INIT_VALUE_ADDRESS);
-        /*
-        time_format = eeprom_read_byte((uint8_t*)TIME_FORMAT_ADDRESS);
-        led_mode = eeprom_read_byte((uint8_t*)LED_MODE_ADDRESS);
-        buzzer_mode = eeprom_read_byte((uint8_t*)BUZZER_MODE_ADDRESS);
-        lamp_training_mode = eeprom_read_byte((uint8_t*)LAMP_TRAINING_MODE_ADDRESS);
-        calendar_mode = eeprom_read_byte((uint8_t*)CALENDAR_MODE_ADDRESS);
-        */        
+        param.time_format       = TIME_FORMAT_DEFAULT;   //0-12, 1-24
+        param.led_mode          = LED_MODE_DEFAULT;      //0-off, 1-on(7-22), 2 - on
+        param.buzzer_mode       = BUZZER_MODE_DEFAULT;   //0-off, 1-on(7-20), 2-on
+        param.calendar_mode     = CALENDAR_MODE_DEFAULT; //0-off, 1-on
+        param.neon_mode         = NEON_MODE_DEFAULT;     //0 - 1Hz, 1 - 1/3, 2 - off    
     }  
-
+    
     // --------------------- Set Flags -------------------------
-    flags.button = 0x80;
-    flags.indi   = 0xF0;
-    flags.common = 0xF8;
+    flag_button = 0x80;
+    flag_indi   = 0xF0;
+    flag_common = 0xF8;
 
-#ifdef TEST_INDICATOR    
-  int i = 9;
-  do { set_indicator_all(i); } while (i--);
-  //for (int i = 0; i < 10; ++i) {
-  //    set_indicator_all(i, 0xF0);
-  //    _delay_ms(1000);
-  //  }
-#endif
-    
     uint8_t blink_time = NEON_TIMER;
-    
+    uint8_t counter = 0;
+    digit = 0;
     sei();   // Start interrupts
 
+#ifdef TEST_INDICATOR    
+    train_lamps();
+#endif
+    
     for(;;) {
         
-       if (flags.common & TIME_MASK) { rtc3231a_read_time(); }
-       if (flags.common & DATE_MASK) { rtc3231a_read_date(); }
+       if (flag_common & TIME_MASK) { rtc3231a_read(); }
        
        // ------------------- READ BUTTONS ---------------------
        process_button(SET_PIN,  SET_STATE,  SET_FLAG);
@@ -539,77 +571,61 @@ int main(void) {
  
        // ----------------- STATE MACHINE ---------------
        switch(mode) {
-       
-     /*  case LAMP_TRAINING:
-           flags.indi = 0xF0;
-           flags.common &= ~NEON_BLINK_STATE_MASK;
-           flags.common |= NEON_STATE_MASK;
-           set_indicator_all(counter);
-       */
+
        //INDICATOR 0-3
        //MODE 3s hold -> Menu
        //SET press    -> Date
        case CURRENT_TIME:
-           if (param.calendar_mode && sec > 55) { 
+           if (is_set_pressed() || (!(min%5) && sec > 55 && param.calendar_mode)) { 
                mode = CURRENT_DATE;
                break; 
            }
+           
            blink_time = NEON_TIMER;
-           flags.common |= NEON_BLINK_STATE_MASK;
+           flag_common |= (NEON_BLINK_STATE_MASK | TIME_MASK);
            uint8_t h = hour;
            if (param.time_format) { h = (hour < 13) ? hour : (hour - 12); }
            set_pair_indicator(PAIR_MASK0, h,   0xF0);
            set_pair_indicator(PAIR_MASK1, min, 0xF0);
-           //set_indicator(h, min, 0xF0);
                       
-           if (is_set_pressed()) { mode = CURRENT_DATE; }
-           if (flags.button & MODE_STATE) {
-               if (flags.button & MODE_FIRST_PRESSED) {
-                   flags.button &= ~MODE_FIRST_PRESSED;
+           //if (is_set_pressed()) { mode = CURRENT_DATE; }
+           if (flag_button & MODE_STATE) {
+               if (flag_button & MODE_FIRST_PRESSED) {
+                   flag_button &= ~MODE_FIRST_PRESSED;
                    mode_hold_timer = 0;
                }
                else if (mode_hold_timer > 120) {    
-                   flags.button &= ~MODE_FLAG;               
+                   flag_button &= ~MODE_FLAG;               
                    PORTD |= (1 << BUZZER_PIN);
-                   buzzer_timer = 0;                  
+                   _delay_ms(500);
+                   PORTD &= ~(1 << BUZZER_PIN); 
+                   //buzzer_timer = 0;                  
                    mode = SET_TIME;
                }           
            }
-           else { flags.button |= MODE_FIRST_PRESSED; }
+           else { flag_button |= MODE_FIRST_PRESSED; }
            break;
            
        //INDICATOR 0-3
        //Waiting 5seconds and display time
        case CURRENT_DATE:
+           
+           PORTD &= ~(1 << NEON_PIN);
                   
-           //flags.indi = 0xF0;
-           /*
-           uint8_t current_date[6] = {day/10, day%10, month/10, month%10, year/10, year%10};
-           for (uint8_t i = 5; i < 23; i++) {
+           train_lamps();
+           uint8_t current_date[8] = {day/10, day%10, 0xFF, month/10, month%10, 0xFF, year/10, year%10};
+           for (uint8_t i = 7; i < 27; i++) {
                for (uint8_t j = 0; j < 4; j++) {
-                   uint8_t value = (i+j)%8;
-                   if (value > 5) { indi[j] = 0x00; }
+                   uint8_t s = i+j;
+                   uint8_t value = s%10;
+                   if (value > 7 || (s<8) || (s>27) || current_date[value] == 0xFF) { indi[j] = 0x00; } 
                    else { set_indicatorN(j, current_date[value]); }
                }
-               _delay_ms(250);
+               delay250();
            }
-           */
-           
-           set_pair_indicator(PAIR_MASK0, day,   0xF0);
-           set_pair_indicator(PAIR_MASK1, month, 0xF0);
-           _delay_ms(2000);
+           train_lamps();
            mode = CURRENT_TIME;
-           /*
-           if (time_format) { 
-               set_pair_indicator(PAIR_MASK0, month);
-               set_pair_indicator(PAIR_MASK1, day);
-           }
-           else {
-               set_pair_indicator(PAIR_MASK0, day);
-               set_pair_indicator(PAIR_MASK1, month);
-           }
-           if (date_timer > DATE_TIMEOUT) { mode = CURRENT_TIME; }*/
-           //while(next_step()) {_delay_ms(250); }
+
            break;
        
        //------------------------    
@@ -617,7 +633,7 @@ int main(void) {
        //MENU pressed -> 12-24 set
        //SET  pressed -> set hours
        case SET_TIME:
-           flags.indi = 0xFF;
+           flag_indi = 0xFF;
            blink_time = BLINK_TIME;
            if (is_set_pressed()) { mode = SET_HOURS; }
            next_mode(SET_12_24);
@@ -626,27 +642,28 @@ int main(void) {
        // --------------------------
        // INDICATOR 0-3. INDICATOR 0-1 (blinking)    
        case SET_HOURS:
-           flags.common &= ~(NEON_BLINK_STATE_MASK | TIME_MASK | NEON_STATE_MASK);
+           flag_common &= ~(NEON_BLINK_STATE_MASK | TIME_MASK | NEON_STATE_MASK);
            set_pair_indicator(PAIR_MASK0, hour, 0xF3);
            next_value(&hour, 23, 0);
            next_mode(SET_MINUTES);
-           //process_mode_p(PAIR_MASK0, &hour, 0xF3, 23, 0, SET_MINUTES);
            break;
            
        case SET_MINUTES:
            set_pair_indicator(PAIR_MASK1, min, 0xFC);
            next_value(&min, 59, 0);
            next_mode(SET_12_24);
-           //process_mode_p(PAIR_MASK1, &min, 0xFC, 59, 0, SET_12_24);
+           rtc3231a_write_time();
            break;
            
        // ----------------------------    
        // INDICATOR 0-1 (not blinking)
-       
        case SET_12_24:
-           flags.common &= ~NEON_BLINK_STATE_MASK;
-           flags.common |= (TIME_MASK | NEON_STATE_MASK);
-           process_mode(0, &param.time_format, 0x10, TIME_FORMAT_MAX, 0, SET_LED);
+           flag_common &= ~NEON_BLINK_STATE_MASK;
+           flag_common |= (TIME_MASK | NEON_STATE_MASK);
+           if (param.time_format) { set_pair_indicator(PAIR_MASK0, 12, 0x30); }
+           else { set_pair_indicator(PAIR_MASK0, 24, 0x30); }
+           next_value(&param.time_format, TIME_FORMAT_MAX, 0);
+           next_mode(SET_LED);
            break;
        
        // -------------------------    
@@ -657,25 +674,28 @@ int main(void) {
            
        // INDICATOR 2 (not blinking)
        case SET_BUZZER:       
-           process_mode(2, &param.buzzer_mode, 0x40, BUZZER_MODE_MAX, 0, SET_LAMP_TRAIN);
+           process_mode(2, &param.buzzer_mode, 0x40, BUZZER_MODE_MAX, 0, SET_CALENDAR);
            break;
            
-       // INDICATOR 1 (not blinking)
-       case SET_LAMP_TRAIN:
-           process_mode(1, &param.lamp_training_mode, 0x20, LAMP_TRAINING_MODE_MAX, 0, SET_YEAR);
+       // INDICATOR 1 (not blinking)    
+       case SET_CALENDAR:
+           process_mode(1, &param.calendar_mode, 0x20, CALENDAR_MODE_MAX, 0, SET_NEON);
+           break;
+           
+       // INDICATOR 0 (not blinking)    
+       case SET_NEON:
+           process_mode(0, &param.neon_mode, 0x10, NEON_MODE_MAX, 0, SET_YEAR);
            break;
            
        // INDICATOR 2-3 (blinking)
        case SET_YEAR:
-           flags.common &= ~(DATE_MASK | NEON_STATE_MASK);
+           flag_common &= ~(TIME_MASK | NEON_STATE_MASK);
            set_pair_indicator(PAIR_MASK1, year, 0xCC);
            next_value(&year,99, 0);
            next_mode(SET_MONTH);
-           //process_mode_p(PAIR_MASK1, &year, 0xCC, 99, 0, SET_MONTH);
            break;
            
        case SET_MONTH:
-           //set_indicator(day, month, 0xFF);
            set_pair_indicator(PAIR_MASK0, day,   0xFC);
            set_pair_indicator(PAIR_MASK1, month, 0xFC);
            next_value(&month,12, 1); 
@@ -684,7 +704,8 @@ int main(void) {
            
        case SET_DAY:
            
-           flags.common;          
+           flag_common;       
+              
            uint8_t max_day = 31;
            //Если высокосный год февраль -2 - (29, иначе 28)
            //1, 3, 5, 7, 8, 10, 12 -31
@@ -696,13 +717,10 @@ int main(void) {
            
            set_pair_indicator(PAIR_MASK0, day, 0xF3);
            next_value(&day, max_day, 1);
-           next_mode(SET_CALENDAR);
-           //process_mode_p(PAIR_MASK0, &day, 0xF3, max_day, 1, SET_CALENDAR);
-           break;
+           next_mode(CURRENT_TIME);
+           rtc3231a_write_date();
+           mode_hold_timer = 0;
            
-       case SET_CALENDAR:
-           process_mode(0, &param.calendar_mode, 0x10, CALENDAR_MODE_MAX, 0, CURRENT_TIME);
-           //mode_hold_timer = 0;
            break;
            
        default:
@@ -710,21 +728,28 @@ int main(void) {
        }
       
       /* -------------------------- Buzzer ------------------------ */
-      
       if (min == 0) {
-          if (param.buzzer_mode == 2 || (param.buzzer_mode == 1 && (hour > BUZZER_START) && (hour < BUZZER_STOP))) {
-              if (flags.common & BUZZER_ONCE_MASK) {
+          if (param.buzzer_mode == 2 || (param.buzzer_mode == 1 && (hour >= BUZZER_START) && (hour <= BUZZER_STOP))) {
+              if (flag_common & BUZZER_ONCE_MASK) {
+                  //PORTD |= (1 << BUZZER_PIN);
+                  //buzzer_timer = 0;
                   PORTD |= (1 << BUZZER_PIN);
-                  buzzer_timer = 0;
-                  flags.common &= ~BUZZER_ONCE_MASK;
+                  delay100();
+                  PORTD &= ~(1 << BUZZER_PIN);
+                  delay100();
+                  PORTD |= (1 << BUZZER_PIN);
+                  delay100();
+                  PORTD &= ~(1 << BUZZER_PIN);
+                  flag_common &= ~BUZZER_ONCE_MASK;
+              
               }  
           }
       }
-      else { flags.common |= BUZZER_ONCE_MASK; }
-      
+      else { flag_common |= BUZZER_ONCE_MASK; }
+      /*
       if (PORTD & (1 << BUZZER_PIN) && buzzer_timer > BUZZER_TIMER) { 
           PORTD &= ~(1 << BUZZER_PIN); 
-      }
+      }*/
       
       // ----------------- LED ---------------------
       PORTD &= ~(1 << LED_PIN);
@@ -733,31 +758,44 @@ int main(void) {
       }
 
       // ---------------- Blink controller ---------
+      
       if (blink_timer > blink_time) {
+          //reset_blink_timer();
+          //toogle_flag();
+          counter+=2;
+          if (counter >=6) { counter = 0; }
           blink_timer = 0;
-          flags.common ^= BLINK_STATE_MASK;
-          counter++;
-          if (counter > 9) { counter = 0; }          
+          flag_common ^= BLINK_STATE_MASK;
       }
       
       // ----------------- NEON --------------------
-      PORTD &= ~(1 << NEON_PIN);
-      if (flags.common & NEON_BLINK_STATE_MASK) {
-          if (flags.common & BLINK_STATE_MASK) { PORTD |= (1 << NEON_PIN); }
-      } else if (flags.common & NEON_STATE_MASK) { PORTD |= (1 << NEON_PIN); }
+      /*PORTD &= ~(1 << NEON_PIN);
+      if (flag_common & (NEON_BLINK_STATE_MASK | BLINK_STATE_MASK)) {
+          PORTD |= (1 << NEON_PIN);
+      } 
+      else if (flag_common & NEON_STATE_MASK) { PORTD |= (1 << NEON_PIN); }*/
+      
+      if (flag_common & NEON_BLINK_STATE_MASK) {
+          if ((flag_common & BLINK_STATE_MASK) || 
+               (param.neon_mode == 1 && counter > 0)) {
+              PORTD |= (1 << NEON_PIN); 
+              
+          }
+          else { 
+              PORTD &= ~(1 << NEON_PIN); 
+              /*if (param.neon_mode == 1 && counter) {
+                  PORTD |= (1 << NEON_PIN); 
+              }*/
+              if (param.neon_mode == 2) {
+                  PORTD |= (1 << NEON_PIN); 
+              } 
+          }
+      } else {
+          if (flag_common & NEON_STATE_MASK) { PORTD |= (1 << NEON_PIN); }
+          else  { PORTD &= ~(1 << NEON_PIN); }
+      }
         
       
-      // --------------- LAMP TRAINING ----------------------------
-/*      
-      if (param.lamp_training_mode == 1 && (hour >= TRAIN_START) && (hour < TRAIN_STOP)) { 
-          flags.common |= LAMP_TRAINING_MODE_MASK;
-          
-      } else { flags.common &= ~(LAMP_TRAINING_MODE_MASK); }
-      */
-      
-      // ----------------- Calendar --------------------------------
-      
-      _delay_ms(50);
     }
     
     return 0;
@@ -766,27 +804,23 @@ int main(void) {
 // ----------------------- Interrupts ---------------------------
 ISR(TIMER0_COMPA_vect) {
     blink_timer++;
-    buzzer_timer++;
+    //buzzer_timer++;
     mode_hold_timer++;
 }
 
 ISR(TIMER1_COMPA_vect) {
     
     uint8_t t = indi[digit];
-    //PORTB = 0x00;
     
-    if (flags.indi & (0x10 << digit)) {
-        if (flags.indi & (0x01 << digit)) {
-            if (flags.common & BLINK_STATE_MASK) { PORTB = t; }
+    if (flag_indi & (0x10 << digit)) {
+        if (flag_indi & (0x01 << digit)) {
+            if (flag_common & BLINK_STATE_MASK) { PORTB = t; }
             else { PORTB = 0x00; }
         }
         else  { PORTB = t; }
     }
     else { PORTB = 0x00; }
-/*
-    
-    if ((flags.indi & (0x10 << digit)) && !(flags & BLINK_STATE_MASK) && (flags.indi & (1 << digit))) { PORTB = indi[digit]; }
-    */
+
     digit++;
     if (digit > 3) { digit = 0; }
 }
